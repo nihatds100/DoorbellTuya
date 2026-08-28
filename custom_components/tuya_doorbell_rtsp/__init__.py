@@ -36,10 +36,11 @@ async def async_setup_entry(hass, entry):
     # Local DP monitors use localKeys captured at config time (stored in the entry).
     details = dict(d.get(CONF_LOCAL_KEYS, {}))
     monitors = []
-    for dev_id, detail in details.items():
-        local_key = (detail or {}).get("localKey")
-        if local_key:
-            monitors.append(_make_monitor(hass, entry, dev_id, local_key))
+    if d.get(CONF_DEVICE_IP):
+        for dev_id, detail in details.items():
+            local_key = (detail or {}).get("localKey")
+            if local_key:
+                monitors.append(_make_monitor(hass, entry, dev_id, local_key))
 
     await bridge.async_start()
 
@@ -53,7 +54,7 @@ async def async_setup_entry(hass, entry):
         go2rtc_ok = True
         for dev_id in d.get(CONF_CAMERAS, []):
             cam = cams.get(dev_id)
-            if cam and not await g2mgr.async_register(bridge.port, cam["rtspPath"], dev_id):
+            if cam and not await g2mgr.async_register(bridge.port, cam["rtspPath"], dev_id, force=True):
                 go2rtc_ok = False
         _LOGGER.info("tuya_doorbell_rtsp: go2rtc routing %s", "enabled" if go2rtc_ok else "partial")
         # Bulletproof: a permanent, self-healing health monitor per camera keeps one

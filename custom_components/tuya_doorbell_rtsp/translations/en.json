@@ -2,14 +2,18 @@
   "config": {
     "step": {
       "user": {
-        "title": "Tuya Doorbell RTSP (LAN-only)",
-        "description": "Enter your Tuya / Smart Life account. Video stays on your LAN (no cloud relay).",
+        "title": "Tuya Doorbell RTSP",
+        "description": "Sign in with your Tuya / Smart Life account. Only cloud signalling is used; the media prefers your LAN and stays local when Home Assistant is on the same network as the doorbell.",
         "data": {
           "email": "Email",
           "password": "Password",
-          "country_code": "Country code (e.g. 90 for Turkey)",
+          "country_code": "Phone country code (e.g. 1, 44, 49)",
           "region": "Region",
-          "rtsp_port": "RTSP port"
+          "rtsp_port": "RTSP port",
+          "device_ip": "Doorbell local IP (optional)"
+        },
+        "data_description": {
+          "device_ip": "Local IP of the doorbell on your LAN, e.g. 192.168.1.50. Needed only for button / datapoint events; leave empty to skip them (auto-discovery does not work from a container)."
         }
       },
       "cameras": {

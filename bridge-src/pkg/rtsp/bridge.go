@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pion/rtcp"
 	pion "github.com/pion/webrtc/v4"
 	"golang.org/x/net/publicsuffix"
 
@@ -156,12 +157,36 @@ func (wb *WebRTCBridge) Start() error {
 		return fmt.Errorf("failed to create offer: %v", err)
 	}
 
-	if err = wb.waiter.Wait(); err != nil {
-		return fmt.Errorf("failed to establish connection: %v", err)
+	select {
+	case werr := <-wb.waiter.WaitChan():
+		if werr != nil {
+			return fmt.Errorf("failed to establish connection: %v", werr)
+		}
+	case <-time.After(30 * time.Second):
+		return fmt.Errorf("failed to establish connection: timeout (device may be holding a stuck session)")
 	}
 
 	wb.connected = true
 	core.Logger.Info().Msgf("WebRTC bridge started successfully for camera: %s", wb.camera.DeviceName)
+
+	// Periodically request keyframes so a viewer joining the (warm) stream starts
+	// at most ~one interval behind real-time, instead of waiting for the device's
+	// long native GOP (which showed as ~10s of video latency while audio was
+	// near-instant). H264 (non-HEVC) only; HEVC uses a different transport.
+	if !wb.isHEVC {
+		go func() {
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-wb.ctx.Done():
+					return
+				case <-ticker.C:
+					wb.RequestKeyframe()
+				}
+			}
+		}()
+	}
 
 	return nil
 }
@@ -178,13 +203,16 @@ func (wb *WebRTCBridge) Stop() {
 
 	core.Logger.Info().Msgf("Stopping WebRTC bridge for camera: %s", wb.camera.DeviceName)
 
-	// Cancel context to stop all goroutines
-	wb.cancel()
-
-	// Send disconnect
+	// Clean close: tell the camera to end its WebRTC session FIRST and give the
+	// MQTT message time to be delivered BEFORE we cancel the context / close MQTT,
+	// so the device releases its single WebRTC session instead of leaving it stuck.
 	if wb.cameraClient != nil {
 		wb.cameraClient.SendDisconnect()
+		time.Sleep(500 * time.Millisecond)
 	}
+
+	// Cancel context to stop all goroutines
+	wb.cancel()
 
 	// Close peer connection
 	if wb.peerConnection != nil {
@@ -202,6 +230,34 @@ func (wb *WebRTCBridge) Stop() {
 	}
 
 	core.Logger.Info().Msgf("WebRTC bridge stopped for camera: %s", wb.camera.DeviceName)
+}
+
+func (wb *WebRTCBridge) ForceStop() {
+	wb.mutex.Lock()
+	defer wb.mutex.Unlock()
+
+	wb.connected = false
+
+	core.Logger.Info().Msgf("Force-stopping WebRTC bridge (clearing stuck session) for camera: %s", wb.camera.DeviceName)
+
+	// Tell the device to release its (possibly stuck) WebRTC session, then give
+	// the MQTT message time to be delivered before we tear everything down.
+	if wb.cameraClient != nil {
+		wb.cameraClient.SendDisconnect()
+		time.Sleep(1500 * time.Millisecond)
+	}
+	if wb.cancel != nil {
+		wb.cancel()
+	}
+	if wb.peerConnection != nil {
+		wb.peerConnection.Close()
+	}
+	if wb.mqttClient != nil {
+		wb.mqttClient.Stop()
+	}
+	if wb.rtpForwarder != nil {
+		wb.rtpForwarder.Stop()
+	}
 }
 
 func (wb *WebRTCBridge) IsConnected() bool {
@@ -334,8 +390,15 @@ func (wb *WebRTCBridge) setupPeerConnection(webRTCConfig *tuya.WebRTCConfig) err
 		if state == pion.PeerConnectionStateConnected {
 			core.Logger.Info().Msgf("WebRTC connection established")
 
-			if !wb.isHEVC && wb.resolution == "hd" {
-				_ = wb.cameraClient.SendResolution(0)
+			if !wb.isHEVC {
+				// Pick clarity: 0 = HD (high), 1 = SD (low). Fire the waiter for
+				// BOTH resolutions — the original only completed it for hd, so the
+				// sd stream never established.
+				if wb.resolution == "hd" {
+					_ = wb.cameraClient.SendResolution(0)
+				} else {
+					_ = wb.cameraClient.SendResolution(1)
+				}
 				wb.waiter.Done(nil)
 			}
 		}
@@ -450,6 +513,17 @@ func (wb *WebRTCBridge) setupMQTTCameraClient(webRTCConfig *tuya.WebRTCConfig) {
 		wb.handleError(errors.New("camera client disconnected"))
 		wb.connected = false
 	}
+}
+
+// RequestKeyframe asks the camera (WebRTC sender) for an immediate IDR via RTCP PLI,
+// so newly-joined RTSP clients start within ~1s instead of waiting for the next GOP.
+func (wb *WebRTCBridge) RequestKeyframe() {
+	if wb.videoTrack == nil || wb.peerConnection == nil {
+		return
+	}
+	_ = wb.peerConnection.WriteRTCP([]rtcp.Packet{
+		&rtcp.PictureLossIndication{MediaSSRC: uint32(wb.videoTrack.SSRC())},
+	})
 }
 
 func (wb *WebRTCBridge) createAndSendOffer() error {

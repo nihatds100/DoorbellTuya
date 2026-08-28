@@ -40,7 +40,9 @@ def stream_name(device_id: str, quality: str) -> str:
 def _source(bridge_port: int, rtsp_path: str, quality: str) -> str:
     # go2rtc runs its own lenient ffmpeg to read the bridge's quirky RTSP, then
     # fans out with keyframe caching. copy = no transcode (H264 + PCMU passthrough).
-    return f"ffmpeg:rtsp://127.0.0.1:{bridge_port}{rtsp_path}/{quality}#video=copy#audio=copy"
+    # Video only: the doorbell audio is not useful and dropping it lightens
+    # the stream for viewers / NVR / app.
+    return f"ffmpeg:rtsp://127.0.0.1:{bridge_port}{rtsp_path}/{quality}#video=copy"
 
 
 class Go2rtc:

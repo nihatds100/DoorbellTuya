@@ -8,7 +8,7 @@ import homeassistant.helpers.config_validation as cv
 
 from .bridge import TuyaBridge, BridgeError
 from .const import (
-    CONF_CAMERAS, CONF_COUNTRY_CODE, CONF_EMAIL, CONF_PASSWORD,
+    CONF_CAMERAS, CONF_COUNTRY_CODE, CONF_DEVICE_IP, CONF_EMAIL, CONF_PASSWORD,
     CONF_LOCAL_KEYS, CONF_REGION, CONF_RTSP_PORT, DEFAULT_RTSP_PORT, DOMAIN, REGIONS,
 )
 
@@ -47,6 +47,7 @@ class TuyaDoorbellRtspFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Required(CONF_COUNTRY_CODE): str,
             vol.Required(CONF_REGION, default="eu-central"): vol.In(REGIONS),
             vol.Optional(CONF_RTSP_PORT, default=DEFAULT_RTSP_PORT): int,
+            vol.Optional(CONF_DEVICE_IP): str,
         })
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 

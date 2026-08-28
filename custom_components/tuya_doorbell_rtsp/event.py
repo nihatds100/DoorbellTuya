@@ -6,7 +6,7 @@ from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
-from .const import CONF_CAMERAS, DOMAIN
+from .const import CONF_CAMERAS, CONF_DEVICE_IP, DOMAIN
 
 
 def signal(entry_id, device_id):
@@ -17,11 +17,12 @@ async def async_setup_entry(hass, entry, async_add_entities):
     store = hass.data[DOMAIN][entry.entry_id]
     details = store["details"]
     entities = []
-    for dev_id in entry.data.get(CONF_CAMERAS, []):
-        detail = details.get(dev_id)
-        if not detail:
-            continue
-        entities.append(TuyaDPEvent(entry.entry_id, detail))
+    if entry.data.get(CONF_DEVICE_IP):
+        for dev_id in entry.data.get(CONF_CAMERAS, []):
+            detail = details.get(dev_id)
+            if not detail:
+                continue
+            entities.append(TuyaDPEvent(entry.entry_id, detail))
     async_add_entities(entities)
 
 

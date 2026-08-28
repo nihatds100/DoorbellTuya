@@ -4,8 +4,9 @@
 
 Many Tuya video doorbells expose no native RTSP/ONVIF, so the only way to watch
 them is the cloud app. This custom integration gives you a **local RTSP URL** for
-the live stream that your app, NVR, or Home Assistant can pull — with the media
-staying on your LAN and coming up in **~0.7 seconds**, reliably.
+the live stream that your app, NVR, or Home Assistant can pull — coming up in
+about a second, with the media **preferring your LAN** (it stays local when Home
+Assistant is on the same network as the doorbell).
 
 > Personal / hobby project. **Noncommercial use only.** Not affiliated with,
 > endorsed by, or connected to Tuya, Smart Life, or any device manufacturer.
@@ -17,7 +18,8 @@ staying on your LAN and coming up in **~0.7 seconds**, reliably.
 - `camera.<name>_hd` / `camera.<name>_sd` — live camera entities.
 - `sensor.<name>_rtsp_url` — the exact **LAN RTSP URL** to pull from your app / NVR
   (shown as the state; `hd` and `sd` URLs in its attributes).
-- `event.<name>_datapoint` — fires on doorbell button press / datapoint changes.
+- `event.<name>_datapoint` — fires on doorbell button press / datapoint changes
+  (created only if you provide the doorbell's local IP during setup).
 
 Point your app or NVR at the URL from the sensor, e.g.
 `rtsp://<home-assistant-ip>:8554/tuyadb_<deviceId>_hd`.
@@ -27,12 +29,16 @@ Point your app or NVR at the URL from the sensor, e.g.
 ```
 Doorbell ──WebRTC──▶ bridge ──▶ go2rtc ──RTSP/WebRTC──▶ your app / NVR / Home Assistant
           (cloud signalling,     (single hot source,
-           media stays on LAN)    keyframe cache, fan-out)
+           media prefers LAN)    keyframe cache, fan-out)
 ```
 
 - A small Go **bridge** (a patched build of seydx's `tuya-ipc-terminal`) speaks the
-  Tuya WebRTC protocol and re-publishes the stream as RTSP. Only **signalling** goes
-  through the internet; the **media stays local** (relay/TURN is blocked).
+  Tuya WebRTC protocol and re-publishes the stream as RTSP. Only **signalling**
+  always goes through the internet. The **media prefers your LAN** (host ICE
+  candidates) and stays local when the bridge is on the same network as the
+  doorbell; the Tuya TURN relay is blocked, but direct peer-to-peer over the
+  internet (srflx) is allowed — so remote viewing works too. It is **not** an
+  absolute LAN-only guarantee.
 - **go2rtc** sits in front so the bridge only ever has one client, and fans out to
   every viewer with a cached keyframe — this is what makes it fast *and* reliable.
 - A built-in **health monitor** keeps one hot session alive permanently and gently
@@ -53,13 +59,17 @@ the bundled one is started on a private port.
 
 1. HACS → **Custom repositories** → add `https://github.com/nihatds100/DoorbellTuya`
    as an **Integration**.
-2. Install **Tuya Doorbell RTSP (LAN-only)**, then restart Home Assistant.
+2. Install **Tuya Doorbell RTSP**, then restart Home Assistant.
 3. **Settings → Devices & Services → Add Integration → Tuya Doorbell RTSP**.
 4. Enter your Tuya / Smart Life **email, password, phone country code** (e.g. `1`,
-   `44`, `49`…) and **server region**, then pick your doorbell.
+   `44`, `49`…) and **server region**. Optionally enter the doorbell's **local IP**
+   (e.g. `192.168.1.50`) to enable button / datapoint events. Then pick your doorbell.
 
-The datapoint monitor logs in locally with the device's local key, which the
-integration reads from your account during setup — no manual key extraction needed.
+The device id and local key are read **automatically** from your account during
+setup — no manual key extraction, and **no Tuya IoT developer API key/secret** is
+required (this uses the Smart Life app login, not the developer platform). The
+doorbell's local IP is asked separately because Tuya LAN auto-discovery does not
+work from inside a container; leave it empty to skip button/datapoint events.
 
 ## A note on credentials & security
 
@@ -75,7 +85,7 @@ This project stands entirely on the work of others — thank you:
 
 - **[seydx/tuya-ipc-terminal](https://github.com/seydx/tuya-ipc-terminal)** (MIT) —
   the Tuya WebRTC ⭢ RTSP bridge. `bridge-src/` and the `tuya-ipc-terminal-*`
-  binaries are a patched build of it (LAN-only media, password login, keyframe
+  binaries are a patched build of it (LAN-preferred media, password login, keyframe
   requests, clean teardown, stuck-session auto-recovery).
 - **[AlexxIT/go2rtc](https://github.com/AlexxIT/go2rtc)** (MIT) — the restreamer
   used for reliable fan-out; shipped unmodified as `bin/go2rtc-linux-*`.
