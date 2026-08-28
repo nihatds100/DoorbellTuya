@@ -1,0 +1,12 @@
+# Secrets / runtime session data (NEVER commit)
+.tuya-data/
+tuya_session_*
+*.session.json
+custom_components/*/data/
+# Python
+__pycache__/
+*.pyc
+# build artifacts
+bridge-src/tuya-ipc-terminal
+bridge-src/build-*
+bridge-src/.tuya-data/

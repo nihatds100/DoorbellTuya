@@ -1,0 +1,13 @@
+{
+  "domain": "tuya_doorbell_rtsp",
+  "name": "Tuya Doorbell RTSP (LAN-only)",
+  "codeowners": ["@nihatds100"],
+  "config_flow": true,
+  "dependencies": ["stream", "ffmpeg"],
+  "documentation": "https://github.com/nihatds100/DoorbellTuya",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/nihatds100/DoorbellTuya/issues",
+  "requirements": ["tinytuya==1.20.0"],
+  "version": "0.1.0"
+}

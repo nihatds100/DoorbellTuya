@@ -1,0 +1,26 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Tuya Doorbell RTSP (LAN-only)",
+        "description": "Enter your Tuya / Smart Life account. Video stays on your LAN (no cloud relay).",
+        "data": {
+          "email": "Email",
+          "password": "Password",
+          "country_code": "Country code (e.g. 90 for Turkey)",
+          "region": "Region",
+          "rtsp_port": "RTSP port"
+        }
+      },
+      "cameras": {
+        "title": "Select cameras",
+        "data": {"cameras": "Cameras"}
+      }
+    },
+    "error": {
+      "auth_failed": "Login failed. Check email, password and country code.",
+      "no_cameras": "No cameras found on this account."
+    },
+    "abort": {"already_configured": "This account is already configured."}
+  }
+}
