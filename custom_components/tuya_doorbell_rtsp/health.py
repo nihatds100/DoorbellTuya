@@ -1,11 +1,10 @@
 """Bulletproof layer: keep the app-facing RTSP permanently warm and self-heal
-GENTLY (churn is what sticks the device, so recovery must never hammer).
+gently. Warms the lighter SD stream (HD stays on-demand).
 
-One monitor per camera owns a single persistent keep-warm consumer and watches its
-real media flow via ffmpeg -progress. If media dies it restarts the consumer softly
-(reconnects to go2rtc without touching the source); only after several soft restarts
-fail does it force-refresh the go2rtc producer as a last resort. Every recovery is
-spaced >=45s apart, so the one hot session stays stable like the official web client.
+Robust + simple: one persistent plain keep-warm consumer (no -progress, which could
+misfire); restart it if the process exits; a periodic real one-frame probe verifies
+the stream actually delivers video, and only a genuine probe failure (twice) forces a
+fresh go2rtc producer. Recovery is spaced so it never churns the device.
 """
 from __future__ import annotations
 
@@ -23,19 +22,20 @@ class HealthMonitor:
         self._bridge = bridge
         self._dev = device_id
         self._path = rtsp_path
-        self._url = mgr.rtsp_url("127.0.0.1", device_id, "hd")
+        # Keep the lighter SD stream warm (instant); HD stays on-demand.
+        self._quality = "sd"
+        self._url = mgr.rtsp_url("127.0.0.1", device_id, self._quality)
         self._task = None
         self._stop = False
         self._consumer = None
-        self._last_progress = 0.0
-        # Timing chosen to never churn: a cold/post-hiccup establish can take ~17s,
-        # so give generous grace and space recoveries well apart.
-        self._grace = 45         # seconds after a (re)start before judging health
-        self._stall = 40         # seconds without media flow => unhealthy
-        self._check_every = 15
-        self._min_gap = 45       # min seconds between recovery actions
-        self._fails = 0
+        self._grace = 40          # settle time after a (re)start before judging
+        self._check_every = 10
+        self._probe_every = 45    # seconds between real one-frame verifications
+        self._probe_timeout = 18
+        self._last_probe = 0.0
+        self._probe_fails = 0
         self._last_recover = 0.0
+        self._min_gap = 45        # min seconds between producer refreshes
 
     def start(self):
         self._stop = False
@@ -50,14 +50,12 @@ class HealthMonitor:
 
     async def _start_consumer(self):
         await self._stop_consumer()
-        self._last_progress = time.time()
         self._consumer = await asyncio.create_subprocess_exec(
             "ffmpeg", "-rtsp_transport", "tcp", "-i", self._url,
-            "-an", "-c", "copy", "-progress", "pipe:1", "-f", "null", "-",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            "-an", "-c", "copy", "-f", "null", "-",
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
             start_new_session=True,
         )
-        asyncio.ensure_future(self._drain(self._consumer))
 
     async def _stop_consumer(self):
         proc = self._consumer
@@ -72,50 +70,49 @@ class HealthMonitor:
                 except Exception:  # noqa: BLE001
                     pass
 
-    async def _drain(self, proc):
+    async def _probe(self) -> bool:
+        """Pull one frame from the real URL. True only if video actually arrives."""
         try:
-            while True:
-                line = await proc.stdout.readline()
-                if not line:
-                    break
-                if line.startswith(b"frame=") or line.startswith(b"out_time_us="):
-                    self._last_progress = time.time()
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-rtsp_transport", "tcp", "-i", self._url,
+                "-frames:v", "1", "-f", "null", "-",
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            )
+            try:
+                await asyncio.wait_for(proc.wait(), self._probe_timeout)
+            except asyncio.TimeoutError:
+                proc.kill()
+                return False
+            return proc.returncode == 0
         except Exception:  # noqa: BLE001
-            pass
-
-    def _healthy(self):
-        proc = self._consumer
-        if proc is None or proc.returncode is not None:
-            return False, "consumer exited"
-        if time.time() - self._last_progress > self._stall:
-            return False, "media stalled"
-        return True, ""
-
-    async def _recover(self, reason):
-        self._fails += 1
-        self._last_recover = time.time()
-        if self._fails >= 3:
-            # Soft restarts didn't help: the go2rtc producer/source is likely dead.
-            # Force a fresh producer once (heavier), then reset the counter.
-            _LOGGER.warning("tuya_doorbell_rtsp: health (%s, x%d) -> force-refresh go2rtc producer",
-                            reason, self._fails)
-            await self._mgr.async_register(self._bridge.port, self._path, self._dev, qualities=("hd",), force=True)
-            self._fails = 0
-        else:
-            _LOGGER.warning("tuya_doorbell_rtsp: health (%s) -> soft restart keep-warm consumer", reason)
-        await self._start_consumer()
+            return False
 
     async def _run(self):
         await self._start_consumer()
         await asyncio.sleep(self._grace)
         while not self._stop:
             try:
-                ok, reason = self._healthy()
-                if ok:
-                    self._fails = 0
-                elif time.time() - self._last_recover >= self._min_gap:
-                    await self._recover(reason)
-                    await asyncio.sleep(self._grace)  # let it re-establish before next judgement
+                # 1) keep the consumer process alive (cheap, non-destructive)
+                if self._consumer is None or self._consumer.returncode is not None:
+                    _LOGGER.debug("tuya_doorbell_rtsp: keep-warm consumer exited; restarting")
+                    await self._start_consumer()
+                    await asyncio.sleep(self._grace)
+                    continue
+                # 2) periodically verify real media; only a genuine failure refreshes
+                if time.time() - self._last_probe >= self._probe_every:
+                    self._last_probe = time.time()
+                    if await self._probe():
+                        self._probe_fails = 0
+                    else:
+                        self._probe_fails += 1
+                        if self._probe_fails >= 2 and time.time() - self._last_recover >= self._min_gap:
+                            _LOGGER.warning("tuya_doorbell_rtsp: keep-warm probe failed -> refresh go2rtc producer")
+                            self._last_recover = time.time()
+                            self._probe_fails = 0
+                            await self._mgr.async_register(
+                                self._bridge.port, self._path, self._dev, qualities=(self._quality,), force=True)
+                            await self._start_consumer()
+                            await asyncio.sleep(self._grace)
             except asyncio.CancelledError:
                 break
             except Exception as err:  # noqa: BLE001
