@@ -42,7 +42,7 @@ def _source(bridge_port: int, rtsp_path: str, quality: str) -> str:
     # fans out with keyframe caching. copy = no transcode (H264 + PCMU passthrough).
     # Video only: the doorbell audio is not useful and dropping it lightens
     # the stream for viewers / NVR / app.
-    return f"ffmpeg:rtsp://127.0.0.1:{bridge_port}{rtsp_path}/{quality}#video=copy"
+    return f"ffmpeg:rtsp://127.0.0.1:{bridge_port}{rtsp_path}/{quality}#video=copy#raw=-an"
 
 
 class Go2rtc:
